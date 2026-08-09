@@ -1,8 +1,8 @@
 """
-config.py - Centralized configuration for WebShooter FX.
+config.py - Centralized configuration for SnapFrame.
 
-All tunable constants live here (PRD Section 14).
-Values are sensible starting points; tune during Phase 5 & stretch goals.
+All tunable constants live here (SnapFrame PRD Section 15 & 19 Stretch Goals).
+Values are tuned based on real-time empirical webcam gesture testing.
 """
 
 import os
@@ -10,7 +10,10 @@ import os
 # --- Paths ------------------------------------------------------------------
 MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 HAND_LANDMARKER_MODEL = os.path.join(MODEL_DIR, "hand_landmarker.task")
-SOUND_EFFECT_FILE = os.path.join(MODEL_DIR, "thwip.wav")
+
+# Permanent OS-appropriate user Pictures directory (~/Pictures/SnapFrame)
+PICTURES_DIR = os.path.join(os.path.expanduser("~"), "Pictures")
+CAPTURE_DIR = os.path.join(PICTURES_DIR, "SnapFrame")
 
 # --- Camera -----------------------------------------------------------------
 CAMERA_INDEX = 0
@@ -23,29 +26,34 @@ MIN_HAND_DETECTION_CONFIDENCE = 0.6
 MIN_HAND_PRESENCE_CONFIDENCE = 0.6
 MIN_HAND_TRACKING_CONFIDENCE = 0.6
 
-# --- Gesture Classification ------------------------------------------------
+# --- Finger Extension & Pose -----------------------------------------------
 EXTENSION_RATIO_THRESHOLD = 1.3
 
-# --- State Machine Timing --------------------------------------------------
-GESTURE_HOLD_FRAMES = 5       # ~165 ms at 30 FPS
-MISS_TOLERANCE_FRAMES = 6
-COOLDOWN_MS = 500
+# --- Snap Motion Detection (Empirically Tuned) ------------------------------
+SNAP_WINDOW_FRAMES = 12
+SNAP_CONTACT_THRESHOLD = 0.18           # Thumb & middle finger touching
+SNAP_RELEASE_THRESHOLD = 0.38           # Finger separation threshold
+SNAP_RELEASE_WINDOW_FRAMES = 6          # Max frames allowed between contact & release
+SNAP_RELEASE_VELOCITY_THRESHOLD = 0.80  # Minimum separation velocity (norm_dist/sec)
+SNAP_COOLDOWN_MS = 400                  # Per-hand cooldown to avoid double triggers
 
-# --- Web Overlay ------------------------------------------------------------
-WEB_WIDTH_SCALE = 1.4
-WEB_HEIGHT_RATIO = 0.6
-WEB_LINE_SPACING = 12
-WEB_OVERLAY_OPACITY = 0.35
-WEB_OVERLAY_COLOR = (200, 180, 255)   # BGR - pale pink/white
+# --- Handedness Calibration -----------------------------------------------
+INVERT_HANDEDNESS = False               # Set True if left/right snap directions are inverted
 
-# --- Glitch Effect ----------------------------------------------------------
-GLITCH_MAX_SHIFT_PX = 14
-GLITCH_ATTACK_FRAMES = 3
-GLITCH_DECAY_RATE = 0.85
-GLITCH_BLEND = 0.8
+# --- Fist & Capture ---------------------------------------------------------
+FIST_HOLD_FRAMES = 4                    # Consecutive frames to confirm a fist
+CAPTURE_COOLDOWN_MS = 800               # Cooldown gap between photo captures
+CAPTURE_FEEDBACK_MS = 400               # Duration of 'Saved ✓' badge overlay
 
-# --- Sound Effect -----------------------------------------------------------
-ENABLE_SOUND_EFFECTS = True
+# --- Filter Engine ----------------------------------------------------------
+FILTER_COUNT = 10
+FILTER_TRANSITION_MS = 250              # Smooth cross-fade duration on filter switch
+
+# --- Filmstrip Thumbnail Strip (Stretch Goal §19) ---------------------------
+SHOW_FILMSTRIP = True
+FILMSTRIP_THUMB_WIDTH = 96
+FILMSTRIP_THUMB_HEIGHT = 54
+FILMSTRIP_UPDATE_INTERVAL_FRAMES = 6
 
 # --- Debug ------------------------------------------------------------------
-SHOW_DEBUG_HUD = False
+SHOW_DEBUG_HUD = False                  # Initial Debug HUD state (toggle with 'd')

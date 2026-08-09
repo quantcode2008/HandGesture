@@ -1,33 +1,31 @@
 """
-main.py - WebShooter FX (Complete Filter + Sound Effect Stretch Goal).
+main.py - SnapFrame (Complete Application + Filmstrip Carousel Stretch Goal).
 
-Real-time gesture-triggered AR "Web-Shooter" camera filter.
-- Mirrored selfie webcam feed.
-- MediaPipe Tasks API hand landmark tracking.
-- Orientation-invariant rule-based web-shooter gesture classifier.
-- Debounced state machine per hand (IDLE -> ARMING -> ACTIVE -> COOLDOWN).
-- Synthesized "thwip" audio trigger sound effect (played asynchronously).
-- Localized RGB chromatic-aberration glitch pulse effect.
-- Cross-hatch web-pattern overlay (single-hand and two-hand tracking modes).
-- Configurable Debug HUD (toggle with 'd' key or SHOW_DEBUG_HUD in config.py).
+Touchless gesture-controlled camera filter application with 10 visual filters.
+- Snap Right Hand -> ADVANCE Filter (+1) with smooth cross-fade transition
+- Snap Left Hand  -> REVERSE Filter (-1) with smooth cross-fade transition
+- Make a Fist     -> CAPTURE Frame (saved to captures/ folder)
+- Filmstrip Carousel -> Live top thumbnail bar showing all 10 filter previews
 
 Controls:
-  'd' - Toggle Debug HUD (landmarks, FPS, state info)
+  'f' - Toggle Filmstrip thumbnail carousel bar
+  'd' - Toggle Debug HUD (landmarks, FPS, filter index, gesture events)
   'q' or ESC - Exit application
 """
 
-import sys
 import time
 import cv2
+import numpy as np
 
 import config
 from camera import Camera
+from capture.capture_manager import CaptureManager
 from detectors.hand_detector import HandDetector
-from effects.glitch import GlitchEffect
-from effects.sound import SoundPlayer
-from effects.web_overlay import render_web_overlay
-from gestures.gesture_classifier import is_web_shooter_pose
-from gestures.state_machine import GestureStateMachine, State
+from filters.registry import FILTER_REGISTRY
+from gestures.event_manager import GestureEventManager, FilterCommand
+from gestures.fist_detector import is_fist
+from gestures.snap_detector import compute_normalized_thumb_middle_dist
+from ui.filmstrip import FilmstripManager
 
 # --- MediaPipe hand-skeleton connections (21-point topology) ----------------
 HAND_CONNECTIONS = [
@@ -39,27 +37,26 @@ HAND_CONNECTIONS = [
     (5, 9), (9, 13), (13, 17),
 ]
 
-# State -> color (BGR) for visual feedback in Debug HUD
-STATE_COLORS = {
-    State.IDLE:     (180, 180, 180),   # Grey
-    State.ARMING:   (0, 200, 255),     # Amber/yellow
-    State.ACTIVE:   (0, 255, 0),       # Green
-    State.COOLDOWN: (255, 100, 100),   # Light blue
-}
-
 LANDMARK_RADIUS = 5
 CONNECTION_THICKNESS = 2
 
 
-def draw_landmarks_on_frame(frame, hand_landmarks_list, handedness_list, states):
-    """Draw landmark skeleton and state labels on frame for Debug HUD mode."""
+def draw_landmarks_on_frame(frame, hand_landmarks_list, handedness_list):
+    """Draw landmark skeleton and handedness labels for Debug HUD mode."""
     h, w, _ = frame.shape
 
     for hand_idx, landmarks in enumerate(hand_landmarks_list):
-        if hand_idx < len(states):
-            color = STATE_COLORS.get(states[hand_idx], (180, 180, 180))
+        if handedness_list and hand_idx < len(handedness_list):
+            hand_name = handedness_list[hand_idx][0].category_name
         else:
-            color = (180, 180, 180)
+            hand_name = "?"
+
+        if hand_name == "Left":
+            hand_name = "Right"
+        elif hand_name == "Right":
+            hand_name = "Left"
+
+        color = (255, 200, 0) if hand_name == "Right" else (147, 20, 255)
 
         points = []
         for lm in landmarks:
@@ -77,13 +74,9 @@ def draw_landmarks_on_frame(frame, hand_landmarks_list, handedness_list, states)
             else:
                 cv2.circle(frame, (px, py), LANDMARK_RADIUS, color, -1, cv2.LINE_AA)
 
-        if handedness_list and hand_idx < len(handedness_list):
-            hand_name = handedness_list[hand_idx][0].category_name
-        else:
-            hand_name = "?"
-
-        state_name = states[hand_idx].name if hand_idx < len(states) else "?"
-        label = f"{hand_name} | {state_name}"
+        norm_dist = compute_normalized_thumb_middle_dist(landmarks)
+        fist_str = " [FIST]" if is_fist(landmarks) else ""
+        label = f"{hand_name} | d={norm_dist:.2f}{fist_str}"
         wrist = points[0]
         cv2.putText(
             frame, label,
@@ -92,12 +85,41 @@ def draw_landmarks_on_frame(frame, hand_landmarks_list, handedness_list, states)
         )
 
 
+def draw_filter_banner(frame, filter_name: str, filter_idx: int, total_filters: int):
+    """Draw semi-transparent bottom banner displaying current filter title (FR-8)."""
+    h, w, _ = frame.shape
+    banner_height = 55
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, h - banner_height), (w, h), (15, 15, 25), -1)
+    cv2.addWeighted(overlay, 0.70, frame, 0.30, 0, frame)
+
+    title_text = f"FILTER [{filter_idx + 1}/{total_filters}]: {filter_name}"
+    cv2.putText(
+        frame, title_text,
+        (20, h - 20),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA,
+    )
+
+    help_text = "Snap Right/Left: Next/Prev | Fist: Capture | 'f': Filmstrip"
+    cv2.putText(
+        frame, help_text,
+        (w - 490, h - 20),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1, cv2.LINE_AA,
+    )
+
+
 def main():
     print("=" * 60)
-    print("                WebShooter FX - AR Camera Filter")
+    print("             SnapFrame — Camera Filter Application")
     print("=" * 60)
+    print("Gesture Controls:")
+    print("  Snap Right Hand -> ADVANCE Filter (+1)")
+    print("  Snap Left Hand  -> REVERSE Filter (-1)")
+    print("  Make a Fist     -> CAPTURE Frame\n")
     print("Controls:")
-    print("  Press 'd' to toggle Debug HUD (landmarks, FPS, states)")
+    print("  Press 'f' to toggle Filmstrip Thumbnail Bar")
+    print("  Press 'd' to toggle Debug HUD")
     print("  Press 'q' or ESC to exit\n")
 
     try:
@@ -107,19 +129,25 @@ def main():
         return
 
     detector = HandDetector()
-    glitch_effect = GlitchEffect()
-    sound_player = SoundPlayer()
+    event_manager = GestureEventManager()
+    capture_manager = CaptureManager()
+    filmstrip_manager = FilmstripManager()
 
-    state_machines = {
-        "Left": GestureStateMachine("Left"),
-        "Right": GestureStateMachine("Right"),
-    }
-
+    filter_index = 0
+    num_filters = len(FILTER_REGISTRY)
     show_debug = config.SHOW_DEBUG_HUD
+
+    # Cross-fade transition state
+    old_filter_index = filter_index
+    transition_start_time = 0.0
+    transition_dur_sec = config.FILTER_TRANSITION_MS / 1000.0
 
     fps_start = time.perf_counter()
     frame_count = 0
     display_fps = 0.0
+
+    last_event_text = "None"
+    last_event_time = 0.0
 
     try:
         while True:
@@ -129,100 +157,122 @@ def main():
 
             frame = cv2.flip(frame, 1)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            timestamp_ms = int(time.perf_counter() * 1000)
+            now = time.perf_counter()
+            timestamp_ms = int(now * 1000)
 
+            # 1. Run hand tracking
             result = detector.detect(rgb, timestamp_ms)
 
-            seen_hands = set()
-            hand_states = []
+            # 2. Update gesture detectors & event manager
+            cmd, trigger_capture = event_manager.process_frame(
+                result.hand_landmarks if result else [],
+                result.handedness if result else [],
+                now,
+            )
 
-            if result.hand_landmarks:
-                for hand_idx, landmarks in enumerate(result.hand_landmarks):
-                    if result.handedness and hand_idx < len(result.handedness):
-                        hand_name = result.handedness[hand_idx][0].category_name
-                    else:
-                        hand_name = "Right" if hand_idx == 0 else "Left"
+            # 3. Resolve snap events -> filter navigation with cross-fade (FR-5, §11.2)
+            if cmd == FilterCommand.ADVANCE:
+                old_filter_index = filter_index
+                filter_index = (filter_index + 1) % num_filters
+                transition_start_time = now
+                last_event_text = f"SNAP RIGHT -> [{filter_index + 1}/10]"
+                last_event_time = now
+                print(f"[NAV] Filter ADVANCED -> [{filter_index + 1}/10]: {FILTER_REGISTRY[filter_index][0]}")
 
-                    if hand_name == "Left":
-                        hand_name = "Right"
-                    elif hand_name == "Right":
-                        hand_name = "Left"
+            elif cmd == FilterCommand.REVERSE:
+                old_filter_index = filter_index
+                filter_index = (filter_index - 1) % num_filters
+                transition_start_time = now
+                last_event_text = f"SNAP LEFT -> [{filter_index + 1}/10]"
+                last_event_time = now
+                print(f"[NAV] Filter REVERSED -> [{filter_index + 1}/10]: {FILTER_REGISTRY[filter_index][0]}")
 
-                    seen_hands.add(hand_name)
-                    gesture = is_web_shooter_pose(landmarks)
+            # 4. Filter Rendering with Cross-Fade Transition (§11.2)
+            filter_name, filter_func = FILTER_REGISTRY[filter_index]
+            dt_trans = now - transition_start_time
 
-                    sm = state_machines.get(hand_name)
-                    if sm:
-                        prev_state = sm.state
-                        new_state = sm.update(gesture)
-                        hand_states.append(new_state)
+            if dt_trans < transition_dur_sec and old_filter_index != filter_index:
+                alpha = np.clip(dt_trans / transition_dur_sec, 0.0, 1.0)
+                old_func = FILTER_REGISTRY[old_filter_index][1]
+                frame_new = filter_func(frame)
+                frame_old = old_func(frame)
+                filtered_frame = cv2.addWeighted(frame_new, alpha, frame_old, 1.0 - alpha, 0)
+            else:
+                filtered_frame = filter_func(frame)
 
-                        # Trigger sound effect on transition into ACTIVE
-                        if prev_state != State.ACTIVE and new_state == State.ACTIVE:
-                            sound_player.play_thwip()
-                    else:
-                        hand_states.append(State.IDLE)
+            # 5. Handle Fist Capture trigger (FR-6, §12)
+            if trigger_capture:
+                last_event_text = "FIST -> CAPTURE!"
+                last_event_time = now
+                capture_manager.save_capture(filtered_frame, filter_name, now)
 
-            for name, sm in state_machines.items():
-                if name not in seen_hands:
-                    sm.reset()
+            # Create output frame for UI overlays
+            output_frame = filtered_frame.copy()
 
-            # ─── Layer Ordering (PRD Section 11.3) ───────────────────────────
-            # 1. Base frame
-            # 2. Glitch effect in-place
-            # 3. Web overlay alpha-composited
-            # 4. Debug HUD (if enabled)
-            active_mask = [st == State.ACTIVE for st in hand_states]
-            if result.hand_landmarks and any(active_mask):
-                frame = glitch_effect.apply(frame, result.hand_landmarks, active_mask)
-                frame = render_web_overlay(frame, result.hand_landmarks, active_mask)
+            # 6. Render Filmstrip Thumbnail Carousel Bar (Stretch Goal §19)
+            output_frame = filmstrip_manager.render(output_frame, filter_index)
 
-            # Debug HUD overlay
+            # 7. Render filter name banner (FR-8)
+            draw_filter_banner(output_frame, filter_name, filter_index, num_filters)
+
+            # 8. Render capture flash & badge feedback (FR-10)
+            output_frame = capture_manager.render_feedback(output_frame, now)
+
+            # 9. Render Debug HUD if enabled (FR-12)
             if show_debug:
-                if result.hand_landmarks:
-                    draw_landmarks_on_frame(
-                        frame, result.hand_landmarks, result.handedness, hand_states
-                    )
+                if result and result.hand_landmarks:
+                    draw_landmarks_on_frame(output_frame, result.hand_landmarks, result.handedness)
 
                 frame_count += 1
-                elapsed = time.perf_counter() - fps_start
+                elapsed = now - fps_start
                 if elapsed >= 0.5:
                     display_fps = frame_count / elapsed
                     frame_count = 0
-                    fps_start = time.perf_counter()
+                    fps_start = now
+
+                hud_y_start = 110 if config.SHOW_FILMSTRIP else 30
 
                 cv2.putText(
-                    frame, f"FPS: {display_fps:.1f}",
-                    (10, 30),
+                    output_frame, f"FPS: {display_fps:.1f}",
+                    (10, hud_y_start),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA,
                 )
 
-                hands_found = len(result.hand_landmarks) if result.hand_landmarks else 0
+                hands_found = len(result.hand_landmarks) if result and result.hand_landmarks else 0
                 cv2.putText(
-                    frame, f"Hands: {hands_found}",
-                    (10, 60),
+                    output_frame, f"Hands: {hands_found}",
+                    (10, hud_y_start + 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA,
                 )
 
-                for i, (name, sm) in enumerate(state_machines.items()):
-                    state_color = STATE_COLORS.get(sm.state, (180, 180, 180))
+                cv2.putText(
+                    output_frame, f"Index: {filter_index + 1}/{num_filters}",
+                    (10, hud_y_start + 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA,
+                )
+
+                if now - last_event_time < 1.5:
                     cv2.putText(
-                        frame, f"{name}: {sm.state.name}",
-                        (10, 90 + i * 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, state_color, 2, cv2.LINE_AA,
+                        output_frame, f"Event: {last_event_text}",
+                        (10, hud_y_start + 90),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2, cv2.LINE_AA,
                     )
             else:
-                # Small clean indicator when debug HUD is off
+                top_hint_y = 100 if config.SHOW_FILMSTRIP else 30
                 cv2.putText(
-                    frame, "[Press 'd' for Debug HUD]",
-                    (10, 30),
+                    output_frame, "[Press 'd' for Debug HUD]",
+                    (10, top_hint_y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA,
                 )
 
-            cv2.imshow("WebShooter FX", frame)
+            # 10. Display frame
+            cv2.imshow("SnapFrame", output_frame)
 
             key = cv2.waitKey(1) & 0xFF
-            if key == ord("d"):
+            if key == ord("f"):
+                config.SHOW_FILMSTRIP = not config.SHOW_FILMSTRIP
+                print(f"[FILMSTRIP] Filmstrip carousel toggled {'ON' if config.SHOW_FILMSTRIP else 'OFF'}")
+            elif key == ord("d"):
                 show_debug = not show_debug
                 print(f"[HUD] Debug HUD toggled {'ON' if show_debug else 'OFF'}")
             elif key == ord("q") or key == 27:

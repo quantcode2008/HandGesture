@@ -1,6 +1,6 @@
-# WebShooter FX 🕸️⚡
+# SnapFrame 📸✨
 
-Real-time gesture-triggered AR "Web-Shooter" camera filter built in Python using OpenCV and MediaPipe Tasks.
+A real-time, touchless gesture-controlled camera filter application built in Python using OpenCV and MediaPipe Tasks API.
 
 ![Python 3.x](https://img.shields.io/badge/Python-3.x-blue.svg)
 ![OpenCV](https://img.shields.io/badge/OpenCV-5.0+-green.svg)
@@ -10,9 +10,39 @@ Real-time gesture-triggered AR "Web-Shooter" camera filter built in Python using
 
 ## 🌟 Overview
 
-**WebShooter FX** tracks hand geometry in real-time through your computer's webcam. Whenever you hold up your hands in the classic "web-shooter" pose (index and pinky fingers extended, middle and ring fingers curled), the filter fires a stylized visual effect anchored to your hand movement:
-- **Cross-Hatch Web Mesh Overlay**: Rotates, scales, and repositions live based on your single-hand orientation or inter-hand distance.
-- **RGB Chromatic-Aberration Glitch Pulse**: A localized color-channel shift pulse that triggers dynamically on gesture confirmation.
+**SnapFrame** transforms your computer's webcam into a slideshow camera filter booth controlled entirely by hand gestures:
+- **Snap Right Hand 🤏➡️**: Advance to the next visual filter.
+- **Snap Left Hand 🤏⬅️**: Go back to the previous visual filter (wraps around).
+- **Make a Closed Fist ✊📸**: Capture a high-resolution photo with the active filter applied, saved automatically to your computer's Pictures folder.
+
+---
+
+## 🖼️ Saved Photo Location
+
+Captured photos are automatically saved to a permanent, OS-appropriate **SnapFrame** folder in your system's Pictures directory:
+
+- **Windows**: `C:\Users\<Username>\Pictures\SnapFrame` (`%USERPROFILE%\Pictures\SnapFrame`)
+- **macOS**: `/Users/<Username>/Pictures/SnapFrame` (`~/Pictures/SnapFrame`)
+- **Linux**: `/home/<Username>/Pictures/SnapFrame` (`~/Pictures/SnapFrame`)
+
+Filename pattern: `capture_{filter_name}_{YYYYMMDD_HHMMSS}.png` (e.g., `capture_noir_20260809_183500.png`).
+
+---
+
+## 🎨 The 10 Visual Filters
+
+SnapFrame features 10 distinct, high-quality image processing filters:
+
+1. **Noir**: High-contrast filmic black & white with S-curve contrast and subtle film grain.
+2. **Vintage Film**: Warm faded tones with desaturation and radial vignette.
+3. **Arctic Blue**: Cold, crisp blue-shifted tones with contrast boost.
+4. **Golden Hour**: Warm highlight tone curve with Gaussian bright-pass bloom glow.
+5. **Cyberpunk Duotone**: Two-tone magenta shadows to electric cyan highlights gradient.
+6. **Sepia Classic**: Traditional 3×3 sepia color transformation.
+7. **Soft Portrait**: Bilateral skin smoothing (60/40 blend) with subtle warmth lift.
+8. **Cartoon Sketch**: Bilateral color quantization overlaid with adaptive threshold ink outlines.
+9. **Cross-Process Pop**: Independent channel S-curve LUTs with 30% saturation boost.
+10. **Infrared Dream**: Surreal false-color foliage remap with soft highlight bloom.
 
 ---
 
@@ -24,16 +54,16 @@ Real-time gesture-triggered AR "Web-Shooter" camera filter built in Python using
 
 ### 2. Installation & Setup
 
-Clone the repository and install dependencies:
 ```bash
-git clone https://github.com/your-username/webshooter-fx.git
-cd webshooter-fx
+# Clone the repository
+git clone https://github.com/quantcode2008/HandGesture.git
+cd HandGesture
 
-# Install Python requirements
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 3. Run the Filter
+### 3. Run SnapFrame
 
 ```bash
 python main.py
@@ -43,46 +73,56 @@ python main.py
 
 ## 🎮 Controls
 
-| Key | Action |
-|-----|--------|
-| `d` | Toggle Debug HUD (shows/hides 21 raw hand landmarks, skeleton lines, FPS, and state machine transitions) |
-| `q` or `ESC` | Exit application |
+| Gesture / Key | Action |
+|---------------|--------|
+| **Right Hand Snap** | Advance to next filter (+1) with smooth cross-fade |
+| **Left Hand Snap** | Reverse to previous filter (-1) with smooth cross-fade |
+| **Make a Fist** | Capture photo frame (saved to `~/Pictures/SnapFrame/` with flash + badge feedback) |
+| **`f`** | Toggle Filmstrip thumbnail carousel bar |
+| **`d`** | Toggle Debug HUD (landmarks, FPS, filter index, gesture events) |
+| **`q` or `ESC`** | Exit application |
 
 ---
 
-## 🏗️ Architecture & Module Breakdown
+## 🏗️ Architecture & Project Structure
 
 ```
-webshooter-fx/
-├── main.py                     # Main application loop & composite layer manager
-├── config.py                   # Centralized configuration parameters
-├── camera.py                   # OpenCV VideoCapture camera wrapper
+snapframe/
+├── main.py                     # Application loop, gesture dispatch & cross-fade render engine
+├── config.py                   # Centralized configuration thresholds & ~/Pictures/SnapFrame path
+├── camera.py                   # OpenCV VideoCapture wrapper (1280x720, mirrored selfie view)
 ├── detectors/
-│   ├── hand_detector.py        # MediaPipe Tasks HandLandmarker wrapper
-│   └── face_detector.py        # (v1.1 stub) FaceLandmarker wrapper
+│   └── hand_detector.py        # MediaPipe Tasks HandLandmarker wrapper
 ├── gestures/
-│   ├── gesture_classifier.py   # Orientation-invariant distance-ratio gesture classifier
-│   └── state_machine.py        # Debounced state machine (IDLE -> ARMING -> ACTIVE -> COOLDOWN)
-├── effects/
-│   ├── web_overlay.py          # Cross-hatch web pattern generator & alpha compositor
-│   └── glitch.py               # RGB chromatic-aberration channel-shift pulse effect
-├── utils/
-│   ├── geometry.py             # Distance, angle, midpoint, & rotation matrix helpers
-│   └── smoothing.py            # Exponential moving average & rolling buffer utilities
+│   ├── fist_detector.py        # Orientation-invariant closed fist pose detector
+│   ├── snap_detector.py        # Temporal thumb-middle motion detector (rolling buffer)
+│   └── event_manager.py        # Handedness mapping, edge-triggered capture state machine
+├── filters/
+│   ├── registry.py             # Single source of truth for 10 filter functions
+│   ├── noir.py                 # Filter 1: Noir
+│   ├── vintage_film.py         # Filter 2: Vintage Film
+│   ├── arctic_blue.py          # Filter 3: Arctic Blue
+│   ├── golden_hour.py          # Filter 4: Golden Hour
+│   ├── cyberpunk_duotone.py    # Filter 5: Cyberpunk Duotone
+│   ├── sepia_classic.py        # Filter 6: Sepia Classic
+│   ├── soft_portrait.py        # Filter 7: Soft Portrait
+│   ├── cartoon_sketch.py       # Filter 8: Cartoon Sketch
+│   ├── cross_process_pop.py    # Filter 9: Cross-Process Pop
+│   └── infrared_dream.py       # Filter 10: Infrared Dream
+├── capture/
+│   └── capture_manager.py      # Filename generator, disk saver (~/Pictures/SnapFrame), feedback
+├── ui/
+│   └── filmstrip.py            # Live filmstrip thumbnail carousel bar (Stretch Goal §19)
 ├── models/
-│   └── hand_landmarker.task    # MediaPipe HandLandmarker model weights
-└── tests/
-    ├── test_geometry.py        # Unit tests for geometry helpers
-    ├── test_gesture_classifier.py # Fixture-based gesture classifier unit tests
-    ├── test_web_overlay.py     # Web overlay renderer unit tests
-    └── test_glitch.py          # Glitch effect unit tests
+│   └── hand_landmarker.task    # MediaPipe HandLandmarker model file
+└── tests/                      # Unit test suites (18 tests)
 ```
 
 ---
 
-## 🧪 Running Unit Tests
+## 🧪 Unit Testing
 
-Run all unit tests across geometry, gesture classification, web overlay, and glitch effects:
+Run all unit test suites:
 
 ```bash
 python -m unittest discover tests -v
@@ -90,19 +130,6 @@ python -m unittest discover tests -v
 
 ---
 
-## ⚙️ Configuration (`config.py`)
-
-All thresholds, colors, and timing parameters can be tuned in `config.py`:
-- `GESTURE_HOLD_FRAMES` (Default: `5`): Consecutive frames required to activate the gesture.
-- `MISS_TOLERANCE_FRAMES` (Default: `6`): Consecutive missed frames tolerated before entering cooldown.
-- `WEB_WIDTH_SCALE` (Default: `1.4`): Web overlay width multiplier relative to hand size / inter-hand distance.
-- `WEB_LINE_SPACING` (Default: `12`): Spacing between cross-hatch web lines.
-- `GLITCH_MAX_SHIFT_PX` (Default: `14`): Maximum pixel offset for RGB chromatic aberration.
-- `GLITCH_DECAY_RATE` (Default: `0.85`): Per-frame decay rate of the glitch pulse.
-- `SHOW_DEBUG_HUD` (Default: `False`): Initial state of the debug HUD.
-
----
-
 ## 📜 License
 
-MIT License. Personal, non-commercial fan-inspired portfolio project.
+MIT License. Personal portfolio / demonstration project.
