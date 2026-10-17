@@ -15,6 +15,24 @@ from gestures.fist_detector import is_fist
 from gestures.snap_detector import SnapDetector, SnapEvent
 
 
+def map_handedness_to_user_perspective(category_name: str) -> str:
+    """
+    Map MediaPipe handedness to user's real physical hand perspective,
+    accounting for the mirrored selfie feed and config.INVERT_HANDEDNESS.
+    """
+    if category_name == "Left":
+        user_hand = "Right"
+    elif category_name == "Right":
+        user_hand = "Left"
+    else:
+        user_hand = category_name
+
+    if getattr(config, "INVERT_HANDEDNESS", False):
+        user_hand = "Left" if user_hand == "Right" else "Right"
+
+    return user_hand
+
+
 class FilterCommand(Enum):
     NONE = auto()
     ADVANCE = auto()   # Next filter (+1)
@@ -38,6 +56,10 @@ class GestureEventManager:
         self.fist_state = FistState.IDLE
         self.fist_arm_count = 0
         self.last_capture_time = 0.0
+
+    def get_debug_info(self) -> Dict[str, Any]:
+        """Return snap detection telemetry for Debug HUD."""
+        return self.snap_detector.get_debug_info()
 
     def process_frame(
         self,
@@ -74,27 +96,18 @@ class GestureEventManager:
             for idx, landmarks in enumerate(hand_landmarks_list):
                 # Resolve handedness label
                 if handedness_list and idx < len(handedness_list):
-                    hand_label = handedness_list[idx][0].category_name
+                    raw_cat = handedness_list[idx][0].category_name
                 else:
-                    hand_label = "Right" if idx == 0 else "Left"
+                    raw_cat = "Left" if idx == 0 else "Right"
 
-                # MediaPipe handedness on mirrored feed: swap Left<->Right for user perspective
-                if hand_label == "Left":
-                    hand_label = "Right"
-                elif hand_label == "Right":
-                    hand_label = "Left"
-
+                # Map to real user perspective on mirrored camera feed
+                hand_label = map_handedness_to_user_perspective(raw_cat)
                 seen_hands.add(hand_label)
 
-                # 1. Snap Detection
+                # 1. Snap Detection (<100ms 2-phase)
                 snap_event = self.snap_detector.update(hand_label, landmarks, timestamp_sec)
                 if snap_event:
-                    # Apply INVERT_HANDEDNESS calibration (§10.4)
-                    is_right = (snap_event.hand_label == "Right")
-                    if config.INVERT_HANDEDNESS:
-                        is_right = not is_right
-
-                    if is_right:
+                    if snap_event.hand_label == "Right":
                         cmd = FilterCommand.ADVANCE
                         print(f"[EVENT] Snap [{snap_event.hand_label}] -> ADVANCE filter")
                     else:
@@ -105,7 +118,7 @@ class GestureEventManager:
                 if is_fist(landmarks):
                     any_fist = True
 
-        # Clear snap buffers for hands not seen this frame
+        # Clear snap tracking/smoother for hands not seen this frame
         for label in ["Left", "Right"]:
             if label not in seen_hands:
                 self.snap_detector.reset_hand(label)

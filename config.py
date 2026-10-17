@@ -29,13 +29,20 @@ MIN_HAND_TRACKING_CONFIDENCE = 0.6
 # --- Finger Extension & Pose -----------------------------------------------
 EXTENSION_RATIO_THRESHOLD = 1.3
 
-# --- Snap Motion Detection (Empirically Tuned) ------------------------------
-SNAP_WINDOW_FRAMES = 12
-SNAP_CONTACT_THRESHOLD = 0.18           # Thumb & middle finger touching
-SNAP_RELEASE_THRESHOLD = 0.38           # Finger separation threshold
-SNAP_RELEASE_WINDOW_FRAMES = 6          # Max frames allowed between contact & release
-SNAP_RELEASE_VELOCITY_THRESHOLD = 0.80  # Minimum separation velocity (norm_dist/sec)
+# --- Snap Motion Detection (Fast 2-Phase Snap <100ms) -----------------------
+SNAP_PINCH_THRESHOLD = 0.22             # Thumb & middle finger touching (normalized distance)
+SNAP_RELEASE_THRESHOLD = 0.38           # Finger separation threshold on release
+SNAP_MIN_PINCH_FRAMES = 2               # Minimum consecutive frames in pinch to reject single-frame jitter
+SNAP_RELEASE_WINDOW_FRAMES = 7          # Max frames allowed for release phase (rolling window ~6-8 frames)
+SNAP_VELOCITY_THRESHOLD = 0.045         # Minimum normalized distance change per frame during release
 SNAP_COOLDOWN_MS = 400                  # Per-hand cooldown to avoid double triggers
+LANDMARK_EMA_ALPHA = 0.75               # Responsive EMA landmark smoothing factor (0.0 to 1.0)
+
+# Backwards-compatibility aliases
+SNAP_CONTACT_THRESHOLD = SNAP_PINCH_THRESHOLD
+SNAP_WINDOW_FRAMES = SNAP_RELEASE_WINDOW_FRAMES
+SNAP_RELEASE_VELOCITY_THRESHOLD = 0.80  # Legacy per-second alias
+
 
 # --- Handedness Calibration -----------------------------------------------
 INVERT_HANDEDNESS = False               # Set True if left/right snap directions are inverted
@@ -57,3 +64,8 @@ FILMSTRIP_UPDATE_INTERVAL_FRAMES = 6
 
 # --- Debug ------------------------------------------------------------------
 SHOW_DEBUG_HUD = False                  # Initial Debug HUD state (toggle with 'd')
+
+# --- Window & Display -------------------------------------------------------
+WINDOW_NAME = "SnapFrame"
+START_MAXIMIZED = True                  # Automatically maximize window on launch to fill screen
+

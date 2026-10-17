@@ -13,7 +13,9 @@ Controls:
   'q' or ESC - Exit application
 """
 
+import sys
 import time
+import ctypes
 import cv2
 import numpy as np
 
@@ -101,11 +103,12 @@ def draw_filter_banner(frame, filter_name: str, filter_idx: int, total_filters: 
         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA,
     )
 
-    help_text = "Snap Right/Left: Next/Prev | Fist: Capture | 'f': Filmstrip"
+    help_text = "Snap: Nav | Fist: Capture | 'f': Filmstrip | 'm'/F11/Double-Click: Fullscreen"
+    (tw, _), _ = cv2.getTextSize(help_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
     cv2.putText(
         frame, help_text,
-        (w - 490, h - 20),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1, cv2.LINE_AA,
+        (max(20, w - tw - 20), h - 20),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA,
     )
 
 
@@ -119,8 +122,34 @@ def main():
     print("  Make a Fist     -> CAPTURE Frame\n")
     print("Controls:")
     print("  Press 'f' to toggle Filmstrip Thumbnail Bar")
+    print("  Press 'm' or F11 (or double-click) to toggle Fullscreen")
     print("  Press 'd' to toggle Debug HUD")
     print("  Press 'q' or ESC to exit\n")
+
+    window_name = getattr(config, "WINDOW_NAME", "SnapFrame")
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL | cv2.WINDOW_FREERATIO)
+
+    is_fullscreen = False
+
+    def toggle_fullscreen():
+        nonlocal is_fullscreen
+        is_fullscreen = not is_fullscreen
+        if is_fullscreen:
+            cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            print("[WINDOW] Fullscreen mode ON")
+        else:
+            cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
+            if sys.platform == "win32" and getattr(config, "START_MAXIMIZED", True):
+                hwnd = ctypes.windll.user32.FindWindowW(None, window_name)
+                if hwnd:
+                    ctypes.windll.user32.ShowWindow(hwnd, 3)
+            print("[WINDOW] Fullscreen mode OFF (Restored)")
+
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDBLCLK:
+            toggle_fullscreen()
+
+    cv2.setMouseCallback(window_name, on_mouse)
 
     try:
         cam = Camera()
@@ -136,6 +165,7 @@ def main():
     filter_index = 0
     num_filters = len(FILTER_REGISTRY)
     show_debug = config.SHOW_DEBUG_HUD
+    is_maximized_set = False
 
     # Cross-fade transition state
     old_filter_index = filter_index
@@ -257,6 +287,24 @@ def main():
                         (10, hud_y_start + 90),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2, cv2.LINE_AA,
                     )
+
+                # Snap Telemetry HUD (pinch distance, velocity, phase)
+                telemetry = event_manager.get_debug_info()
+                telem_y = hud_y_start + (120 if now - last_event_time < 1.5 else 95)
+                for h_name in ("Right", "Left"):
+                    t_info = telemetry.get(h_name)
+                    if t_info:
+                        d_val = t_info["dist"]
+                        v_val = t_info["velocity"]
+                        st_val = t_info["state"]
+                        color_t = (0, 255, 255) if "PINCH" in st_val else ((0, 255, 0) if st_val == "RELEASE" else (220, 220, 220))
+                        line_str = f"[{h_name[0]}-Hand] Dist: {d_val:.2f} | Vel: {v_val:.2f} | {st_val}"
+                        cv2.putText(
+                            output_frame, line_str,
+                            (10, telem_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, color_t, 2, cv2.LINE_AA,
+                        )
+                        telem_y += 24
             else:
                 top_hint_y = 100 if config.SHOW_FILMSTRIP else 30
                 cv2.putText(
@@ -266,17 +314,33 @@ def main():
                 )
 
             # 10. Display frame
-            cv2.imshow("SnapFrame", output_frame)
+            cv2.imshow(window_name, output_frame)
 
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord("f"):
-                config.SHOW_FILMSTRIP = not config.SHOW_FILMSTRIP
-                print(f"[FILMSTRIP] Filmstrip carousel toggled {'ON' if config.SHOW_FILMSTRIP else 'OFF'}")
-            elif key == ord("d"):
-                show_debug = not show_debug
-                print(f"[HUD] Debug HUD toggled {'ON' if show_debug else 'OFF'}")
-            elif key == ord("q") or key == 27:
-                break
+            if not is_maximized_set:
+                if sys.platform == "win32" and getattr(config, "START_MAXIMIZED", True):
+                    hwnd = ctypes.windll.user32.FindWindowW(None, window_name)
+                    if hwnd:
+                        ctypes.windll.user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+                is_maximized_set = True
+
+            key = cv2.waitKeyEx(1)
+            if key != -1:
+                key_char = key & 0xFF
+                if key_char in (ord("f"), ord("F")):
+                    config.SHOW_FILMSTRIP = not config.SHOW_FILMSTRIP
+                    print(f"[FILMSTRIP] Filmstrip carousel toggled {'ON' if config.SHOW_FILMSTRIP else 'OFF'}")
+                elif key_char in (ord("d"), ord("D")):
+                    show_debug = not show_debug
+                    print(f"[HUD] Debug HUD toggled {'ON' if show_debug else 'OFF'}")
+                elif key_char in (ord("m"), ord("M")) or key in (122, 0x7A, 0x7A0000):  # 'm' or F11
+                    toggle_fullscreen()
+                elif key_char == 27:  # ESC
+                    if is_fullscreen:
+                        toggle_fullscreen()
+                    else:
+                        break
+                elif key_char in (ord("q"), ord("Q")):
+                    break
 
     finally:
         detector.close()
