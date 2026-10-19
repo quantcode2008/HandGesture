@@ -16,6 +16,7 @@ Controls:
 import sys
 import time
 import ctypes
+from typing import Optional
 import cv2
 import numpy as np
 
@@ -23,6 +24,7 @@ import config
 from camera import Camera
 from capture.capture_manager import CaptureManager
 from detectors.hand_detector import HandDetector
+from emotions.emotion_detector import EmotionDetector
 from filters.registry import FILTER_REGISTRY
 from gestures.event_manager import GestureEventManager, FilterCommand
 from gestures.fist_detector import is_fist
@@ -103,7 +105,7 @@ def draw_filter_banner(frame, filter_name: str, filter_idx: int, total_filters: 
         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA,
     )
 
-    help_text = "Snap: Nav | Fist: Capture | 'f': Filmstrip | 'm'/F11/Double-Click: Fullscreen"
+    help_text = "Snap: Nav | Fist: Capture | 'f': Filmstrip | 'e': Emotion | 'm'/F11: Fullscreen"
     (tw, _), _ = cv2.getTextSize(help_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
     cv2.putText(
         frame, help_text,
@@ -122,6 +124,7 @@ def main():
     print("  Make a Fist     -> CAPTURE Frame\n")
     print("Controls:")
     print("  Press 'f' to toggle Filmstrip Thumbnail Bar")
+    print("  Press 'e' to toggle Emotion Badge")
     print("  Press 'm' or F11 (or double-click) to toggle Fullscreen")
     print("  Press 'd' to toggle Debug HUD")
     print("  Press 'q' or ESC to exit\n")
@@ -158,6 +161,7 @@ def main():
         return
 
     detector = HandDetector()
+    emotion_detector = EmotionDetector()
     event_manager = GestureEventManager()
     capture_manager = CaptureManager()
     filmstrip_manager = FilmstripManager()
@@ -165,7 +169,12 @@ def main():
     filter_index = 0
     num_filters = len(FILTER_REGISTRY)
     show_debug = config.SHOW_DEBUG_HUD
+    show_emotion = getattr(config, "SHOW_EMOTION_BADGE", True)
     is_maximized_set = False
+
+    current_emotion = getattr(config, "EMOTION_NEUTRAL_LABEL", "Neutral")
+    current_emotion_conf = 0.50
+    suggested_filter: Optional[str] = None
 
     # Cross-fade transition state
     old_filter_index = filter_index
@@ -190,8 +199,14 @@ def main():
             now = time.perf_counter()
             timestamp_ms = int(now * 1000)
 
-            # 1. Run hand tracking
+            # 1. Run hand tracking (async LIVE_STREAM)
             result = detector.detect(rgb, timestamp_ms)
+
+            # 1b. Run facial emotion detection (async LIVE_STREAM)
+            if getattr(config, "ENABLE_EMOTION_DETECTION", True):
+                current_emotion, current_emotion_conf, suggested_filter = (
+                    emotion_detector.detect(rgb, timestamp_ms)
+                )
 
             # 2. Update gesture detectors & event manager
             cmd, trigger_capture = event_manager.process_frame(
@@ -232,15 +247,27 @@ def main():
 
             # 5. Handle Fist Capture trigger (FR-6, §12)
             if trigger_capture:
-                last_event_text = "FIST -> CAPTURE!"
+                last_event_text = f"FIST -> CAPTURE! ({current_emotion})"
                 last_event_time = now
-                capture_manager.save_capture(filtered_frame, filter_name, now)
+                capture_manager.save_capture(
+                    filtered_frame, filter_name, now, emotion=current_emotion
+                )
 
             # Create output frame for UI overlays
             output_frame = filtered_frame.copy()
 
             # 6. Render Filmstrip Thumbnail Carousel Bar (Stretch Goal §19)
             output_frame = filmstrip_manager.render(output_frame, filter_index)
+
+            # 6b. Render Emotion Badge (top-left, toggled with 'e')
+            if show_emotion and getattr(config, "ENABLE_EMOTION_DETECTION", True):
+                output_frame = emotion_detector.render_badge(
+                    output_frame,
+                    current_emotion,
+                    current_emotion_conf,
+                    suggested_filter=suggested_filter,
+                    filmstrip_visible=config.SHOW_FILMSTRIP,
+                )
 
             # 7. Render filter name banner (FR-8)
             draw_filter_banner(output_frame, filter_name, filter_index, num_filters)
@@ -305,6 +332,27 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, color_t, 2, cv2.LINE_AA,
                         )
                         telem_y += 24
+
+                # Emotion Telemetry HUD
+                if getattr(config, "ENABLE_EMOTION_DETECTION", True):
+                    e_info = emotion_detector.get_debug_info()
+                    face_str = "Found" if e_info["face_detected"] else "Searching"
+                    pct_str = f"{int(e_info['confidence'] * 100)}%"
+                    sug_str = f" | Suggest: {e_info['suggested_filter']}" if e_info["suggested_filter"] else ""
+                    e_line = f"[Emotion] {e_info['emotion']} ({pct_str}) | Face: {face_str}{sug_str}"
+                    cv2.putText(
+                        output_frame, e_line,
+                        (10, telem_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 200, 0), 2, cv2.LINE_AA,
+                    )
+                    telem_y += 24
+                    if e_info["top_blendshapes"] != "None":
+                        cv2.putText(
+                            output_frame, f"  Blendshapes: {e_info['top_blendshapes']}",
+                            (10, telem_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 220, 255), 1, cv2.LINE_AA,
+                        )
+                        telem_y += 24
             else:
                 top_hint_y = 100 if config.SHOW_FILMSTRIP else 30
                 cv2.putText(
@@ -329,6 +377,9 @@ def main():
                 if key_char in (ord("f"), ord("F")):
                     config.SHOW_FILMSTRIP = not config.SHOW_FILMSTRIP
                     print(f"[FILMSTRIP] Filmstrip carousel toggled {'ON' if config.SHOW_FILMSTRIP else 'OFF'}")
+                elif key_char in (ord("e"), ord("E")):
+                    show_emotion = not show_emotion
+                    print(f"[EMOTION] Emotion badge toggled {'ON' if show_emotion else 'OFF'}")
                 elif key_char in (ord("d"), ord("D")):
                     show_debug = not show_debug
                     print(f"[HUD] Debug HUD toggled {'ON' if show_debug else 'OFF'}")
@@ -343,6 +394,7 @@ def main():
                     break
 
     finally:
+        emotion_detector.close()
         detector.close()
         cam.release()
         cv2.destroyAllWindows()
@@ -350,3 +402,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

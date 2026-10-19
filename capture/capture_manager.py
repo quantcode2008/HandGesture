@@ -39,7 +39,13 @@ class CaptureManager:
         self.error_until: float = 0.0
         self.error_msg: str = ""
 
-    def save_capture(self, filtered_frame: np.ndarray, filter_name: str, now: float) -> Optional[str]:
+    def save_capture(
+        self,
+        filtered_frame: np.ndarray,
+        filter_name: str,
+        now: float,
+        emotion: Optional[str] = None,
+    ) -> Optional[str]:
         """
         Save the filtered frame (post-filter, pre-HUD) to disk.
 
@@ -51,6 +57,8 @@ class CaptureManager:
             Name of the active filter (e.g. '1. Noir').
         now : float
             Current timestamp in seconds.
+        emotion : str, optional
+            Detected facial emotion (e.g. 'Happy').
 
         Returns
         -------
@@ -59,7 +67,11 @@ class CaptureManager:
         """
         slug = _slugify_filter_name(filter_name)
         timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"capture_{slug}_{timestamp_str}.png"
+        if emotion:
+            emotion_slug = _slugify_filter_name(emotion)
+            filename = f"capture_{slug}_{emotion_slug}_{timestamp_str}.png"
+        else:
+            filename = f"capture_{slug}_{timestamp_str}.png"
         filepath = os.path.join(self.capture_dir, filename)
 
         try:
